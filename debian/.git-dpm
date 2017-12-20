@@ -1,0 +1,11 @@
+# see git-dpm(1) from git-dpm package
+8169c607684dec7a104c17aa03ab71213d33a4f8
+8169c607684dec7a104c17aa03ab71213d33a4f8
+20443b2e3ee70a23e20267be544a1351e5faf00c
+20443b2e3ee70a23e20267be544a1351e5faf00c
+python-qt4_4.11.4+dfsg.orig.tar.gz
+b387cded143994477f05dceb3848756489b486a3
+11079535
+debianTag="debian/%e%v"
+patchedTag="patched/%e%v"
+upstreamTag="upstream/%e%u"

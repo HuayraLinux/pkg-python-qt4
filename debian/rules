@@ -1,0 +1,316 @@
+#!/usr/bin/make -f
+# Uncomment this to turn on verbose mode.
+#export DH_VERBOSE=1
+
+export DH_OPTIONS
+
+py_dbusmoddir = $(shell python$(1) -c 'import dbus.mainloop; print dbus.mainloop.__path__[0]')
+py3_dbusmoddir = $(shell python3 -c 'import dbus.mainloop; print(dbus.mainloop.__path__[0])')
+
+debian_version = $(word 2,$(shell dpkg-parsechangelog | grep ^Version:))
+upstream_dfsg_version = $(firstword $(subst -, ,$(debian_version)))
+upstream_version = $(subst ~,,$(firstword $(subst +, ,$(debian_version))))
+
+export QMAKESPEC=linux-g++
+
+CFLAGS=
+CPPFLAGS=
+CXXFLAGS=
+LDFLAGS=
+ifneq (,$(findstring noopt,$(DEB_BUILD_OPTIONS)))
+	CFLAGS += -O0 -g
+	CXXFLAGS += -O0
+else
+	CFLAGS += $(shell dpkg-buildflags --get CFLAGS)
+	CPPFLAGS += $(shell dpkg-buildflags --get CPPFLAGS)
+	CXXFLAGS += $(shell dpkg-buildflags --get CXXFLAGS)
+	LDFLAGS += $(shell dpkg-buildflags --get LDFLAGS)
+endif
+
+LDFLAGS += -Wl,-O1
+
+ifeq ($(DEB_BUILD_ARCH),alpha)
+	LDFLAGS += -Wl,--no-relax
+endif
+SPLIT=10
+
+PYTHONS := $(shell pyversions -vr) $(shell  py3versions -vr)
+PYTHON3S := $(shell  py3versions -vr)
+
+DEFAULT_PYTHON := $(shell pyversions -vd)
+
+# LIBS_* is unset to avoid linking to too many libraries
+# STRIP is unset to let stripping be handled by dh_strip
+SHARED_CONFIGURE_OPTIONS=--confirm-license --verbose \
+	-q /usr/bin/qmake-qt4 -c -j $(SPLIT) \
+	LIBDIR_QT=/usr/lib STRIP="" MOC=moc-qt4 \
+	LIBS_OPENGL="" LIBS_X11="" LIBS_THREAD="" \
+	CFLAGS="${CFLAGS} ${CPPFLAGS}" \
+	CXXFLAGS="${CXXFLAGS} ${CPPFLAGS}" \
+	LFLAGS="${LDFLAGS}"
+
+
+.PRECIOUS: pyqtconfig-% build-%/configure-stamp dbg-build-%/configure-stamp
+
+configure: $(PYTHON3S:%=pyqtconfig-%) $(PYTHONS:%=build-%/configure-stamp) $(PYTHONS:%=dbg-build-%/configure-stamp)
+
+pyqtconfig-3.%:
+	cat $(CURDIR)/debian/pyqtconfig_py3.py $(CURDIR)/debian/pyqtconfig_py3.snippet \
+		> $(CURDIR)/debian/pyqtconfig_py3.py.tmp
+	sed -e "s/@MINORVERS@/$*/g" <$(CURDIR)/debian/pyqtconfig_py3.py.tmp \
+		> $(CURDIR)/debian/pyqtconfig_py3.py
+	touch $@
+
+build-%/configure-stamp:
+	dh_testdir
+	mkdir -p build-$*
+	cd build-$* && python$* ../configure.py $(SHARED_CONFIGURE_OPTIONS) \
+			-m $(shell python$*-config --configdir) \
+			-d /usr/lib/python$*/dist-packages \
+			--dbus /usr/include/dbus-1.0 \
+			$(if $(filter $(DEFAULT_PYTHON),$*),,--no-designer-plugin) 
+	touch $@
+
+dbg-build-%/configure-stamp:
+	dh_testdir
+	mkdir -p dbg-build-$*
+	cd dbg-build-$* && python$*-dbg ../configure.py $(SHARED_CONFIGURE_OPTIONS) \
+			-m $(shell python$*-dbg-config --configdir) \
+			-l /usr/include/python$*$(if $(filter 3.%, $*),dm,_d) \
+			-d /usr/lib/python$*/dist-packages \
+			--debug --no-designer-plugin
+	touch $@
+
+
+build: build-arch build-indep
+build-arch: $(PYTHON3S:%=pyqtconfig-%) $(PYTHONS:%=build-%/build-stamp) $(PYTHONS:%=dbg-build-%/build-stamp)
+build-indep: build-$(DEFAULT_PYTHON)/build-stamp
+
+build-%/build-stamp: build-%/configure-stamp
+	dh_testdir
+	dh_auto_build --parallel -B build-$*
+	touch $@
+
+dbg-build-%/build-stamp: dbg-build-%/configure-stamp
+	dh_testdir
+	dh_auto_build --parallel -B dbg-build-$*
+	touch $@
+
+install-indep: build-indep
+	dh_testdir
+	dh_testroot
+	dh_prep -i
+	dh_installdirs -i
+	dh_install -i
+	dh_installexamples -Xactiveqt -i
+	cd $(CURDIR)/debian/python-qt4-doc/usr/share/doc/python-qt4-doc/examples/; \
+		cp /usr/share/javascript/jquery/jquery.min.js webkit/fancybrowser/; \
+		find . -name '*.qrc' | sed 's/\.qrc//g' | xargs -I {} \
+			$(CURDIR)/build-$(DEFAULT_PYTHON)/pyrcc/pyrcc4 -py2 {}.qrc -o {}_rc2.py; \
+		find . -name '*.qrc' | sed 's/\.qrc//g' | xargs -I {} \
+			$(CURDIR)/build-$(DEFAULT_PYTHON)/pyrcc/pyrcc4 -py3 {}.qrc -o {}_rc3.py
+	# Symlink duplicate files in examples. Based on Andrew Starr-Bochicchio's
+	# code in ubuntu-packaging-guide.
+	cd $(CURDIR)/debian/python-qt4-doc && \
+	fdupes -r1nq usr/share/doc/python-qt4-doc/examples | while read s; do \
+		set -- $$(echo $$s | tr ' ' '\n' | sort); \
+		f=$$1; shift; for d; do \
+			echo "symlinking identical file $$d to $$f"; \
+			rm $$d; ln -s /$$f $$d; \
+		done; \
+	done
+	dh_link -i
+
+install-arch: build-arch
+	dh_testdir
+	dh_testroot
+	dh_prep -a
+	dh_installdirs -a
+	sed -i -e '/strip/ d' $(CURDIR)/build-$(DEFAULT_PYTHON)/designer/Makefile
+	rm -f $(CURDIR)/debian/python-qt4-dbus.install
+	rm -f $(CURDIR)/debian/python3-dbus.mainloop.qt.install
+	# This is needed to enforce that the install-arch-% rules are
+	# not run in parallel. Both rules install into the same directory,
+	# and therefore might try to access the same files at the same time.
+	# Therefore, instead of depending on the install-arch-% rules,
+	# we invoke them explicitly.
+	for p in $(PYTHONS) ; do \
+		$(MAKE) -f debian/rules install-arch-$$p;\
+	done
+
+	dh_install -a
+
+	for i in $$(find debian/python-*-dbg -name '*.so'); do \
+		b=$$(basename $$i .so); \
+		mv $$i $$(dirname $$i)/$${b}_d.so; \
+	done
+
+	find debian/python*-dbg ! -type d \
+		! \( -name '*.so' -o -name '*config_*d*.py' \) | xargs rm -f
+	find debian/python-*-dbg -depth -type d -empty -exec rmdir {} \;
+
+	#FIXME - copying the file to /usr/bin is not the best way,
+	# it should be imported properly instead.
+	# probably like ipython handles it.
+	cp debian/pyuic4 debian/pyqt4-dev-tools/usr/bin/pyuic4
+
+d3_qt4_dbg = debian/python3-pyqt4-dbg
+
+install-arch-3.%:
+	$(MAKE) -C build-3.$* install \
+		INSTALL_ROOT=$(CURDIR)/debian/tmp DESTDIR=$(CURDIR)/debian/tmp
+	if [ -e $(CURDIR)/debian/tmp$(call py3_dbusmoddir,3.$*)/qt.so ]; then \
+		mkdir -p $(CURDIR)/debian/tmp/usr/lib/python3.$*/dist-packages/dbus/mainloop; \
+		mv $(CURDIR)/debian/tmp$(call py3_dbusmoddir,3.$*)/qt.so \
+		$(CURDIR)/debian/tmp/usr/lib/python3.$*/dist-packages/dbus/mainloop; \
+		echo 'usr/lib/python3.$*/dist-packages/*' >> $(CURDIR)/debian/python3-dbus.mainloop.qt.install;\
+	fi
+	mv $(CURDIR)/debian/tmp/usr/lib/python3.$*/dist-packages/PyQt4/pyqtconfig.py \
+		$(CURDIR)/debian/tmp/usr/lib/python3.$*/dist-packages/PyQt4/pyqtconfig_nd$*.py
+
+	$(MAKE) -C dbg-build-3.$* install DESTDIR=$(CURDIR)/$(d3_qt4_dbg)
+	if [ -e $(CURDIR)/$(d3_qt4_dbg)$(call py3_dbusmoddir,3.$*)/qt.so ]; then \
+		mkdir -p $(CURDIR)/debian/python3-dbus.mainloop.qt-dbg/usr/lib/python3.$*/dist-packages/dbus/mainloop; \
+		mv $(CURDIR)/debian/python3-pyqt4-dbg$(call py3_dbusmoddir,3.$*)/qt.so \
+		$(CURDIR)/debian/python3-dbus.mainloop.qt-dbg/usr/lib/python3.$*/dist-packages/dbus/mainloop; \
+	fi
+
+	# Don't initiate the uic/widget-plugins
+	touch $(CURDIR)/debian/tmp/usr/lib/python3.$*/dist-packages/PyQt4/uic/widget-plugins/.noinit
+	rm $(CURDIR)/debian/tmp/usr/lib/python3.$*/dist-packages/PyQt4/uic/widget-plugins/qtwebkit.py
+
+	mv $(d3_qt4_dbg)/usr/lib/python3.$*/dist-packages/PyQt4/pyqtconfig.py \
+		$(d3_qt4_dbg)/usr/lib/python3.$*/dist-packages/PyQt4/pyqtconfig_d$*.py
+	mkdir -p debian/python3-pyqt4.qtopengl-dbg/usr/lib/python3.$*/dist-packages/PyQt4
+	mv $(d3_qt4_dbg)/usr/lib/python3.$*/dist-packages/PyQt4/QtOpenGL.so \
+		debian/python3-pyqt4.qtopengl-dbg/usr/lib/python3.$*/dist-packages/PyQt4
+	mkdir -p debian/python3-pyqt4.qtsql-dbg/usr/lib/python3.$*/dist-packages/PyQt4
+	mv $(d3_qt4_dbg)/usr/lib/python3.$*/dist-packages/PyQt4/QtSql.so \
+		debian/python3-pyqt4.qtsql-dbg/usr/lib/python3.$*/dist-packages/PyQt4
+	mkdir -p debian/python3-pyqt4.phonon-dbg/usr/lib/python3.$*/dist-packages/PyQt4
+	mv $(d3_qt4_dbg)/usr/lib/python3.$*/dist-packages/PyQt4/phonon.so \
+		debian/python3-pyqt4.phonon-dbg/usr/lib/python3.$*/dist-packages/PyQt4
+	install -Dm 644 -o root -g root debian/pyqtconfig_py3.py debian/python3-pyqt4/usr/lib/python3.$*/dist-packages/PyQt4/pyqtconfig.py
+
+d_qt4_dbg = debian/python-qt4-dbg
+
+install-arch-%:
+	$(MAKE) -C build-$* install \
+		INSTALL_ROOT=$(CURDIR)/debian/tmp DESTDIR=$(CURDIR)/debian/tmp
+
+	$(MAKE) -C dbg-build-$* install DESTDIR=$(CURDIR)/$(d_qt4_dbg)
+
+	# Don't initiate the uic/widget-plugins
+	touch $(CURDIR)/debian/tmp/usr/lib/python$*/dist-packages/PyQt4/uic/widget-plugins/.noinit
+
+	mv $(d_qt4_dbg)/usr/lib/python$*/dist-packages/PyQt4/pyqtconfig.py \
+		$(d_qt4_dbg)/usr/lib/python$*/dist-packages/PyQt4/pyqtconfig_d.py
+	mkdir -p debian/python-qt4-gl-dbg/usr/lib/python$*/dist-packages/PyQt4
+	mv $(d_qt4_dbg)/usr/lib/python$*/dist-packages/PyQt4/QtOpenGL.so \
+		debian/python-qt4-gl-dbg/usr/lib/python$*/dist-packages/PyQt4
+	mkdir -p debian/python-qt4-sql-dbg/usr/lib/python$*/dist-packages/PyQt4
+	mv $(d_qt4_dbg)/usr/lib/python$*/dist-packages/PyQt4/QtSql.so \
+		debian/python-qt4-sql-dbg/usr/lib/python$*/dist-packages/PyQt4
+	mkdir -p debian/python-qt4-phonon-dbg/usr/lib/python$*/dist-packages/PyQt4
+	mv $(d_qt4_dbg)/usr/lib/python$*/dist-packages/PyQt4/phonon.so \
+		debian/python-qt4-phonon-dbg/usr/lib/python$*/dist-packages/PyQt4
+	mkdir -p debian/python-qt4-qtwebkit-dbg/usr/lib/python$*/dist-packages/PyQt4
+	mv $(d_qt4_dbg)/usr/lib/python$*/dist-packages/PyQt4/QtWebKit.so \
+		debian/python-qt4-qtwebkit-dbg/usr/lib/python$*/dist-packages/PyQt4
+
+	if [ -e $(d_qt4_dbg)$(call py_dbusmoddir,$*)/qt.so ]; then \
+		mkdir -p debian/python-qt4-dbus-dbg/$(call py_dbusmoddir,$*);\
+		mv $(d_qt4_dbg)$(call py_dbusmoddir,$*)/qt.so \
+			debian/python-qt4-dbus-dbg$(call py_dbusmoddir,$*);\
+		echo '$(call py_dbusmoddir,$*)/*' >> $(CURDIR)/debian/python-qt4-dbus.install;\
+	fi
+
+
+clean: 
+	dh_testdir
+	dh_testroot
+	-cd designer && make distclean
+	rm -rf $(PYTHONS:%=build-%) $(PYTHONS:%=dbg-build-%) sip/Qt
+	cp $(CURDIR)/debian/pyqtconfig_py3.header $(CURDIR)/debian/pyqtconfig_py3.py
+	rm -rf $(CURDIR)/debian/pyqtconfig_py3.py.tmp
+	rm -rf $(CURDIR)/pyqtconfig-*
+	rm -rf $(CURDIR)/qpy/QtCore/qpycore_post_init.cpp
+	dh_clean
+
+# Must not depend on anything. This is to be called by
+# binary-arch/binary-indep
+# in another 'make' thread.
+binary-common:
+	dh_testdir
+	dh_testroot
+	dh_installman
+	dh_installchangelogs NEWS
+	dh_installdocs -A THANKS
+ifeq (,$(findstring -a, $(DH_OPTIONS)))
+	sphinx-build $(CURDIR)/doc/sphinx \
+	$(CURDIR)/debian/python-qt4-doc/usr/share/doc/python-qt4-doc/html
+	dh_sphinxdoc
+endif
+	dh_sip
+	dh_sip3
+ifeq (,$(findstring -i, $(DH_OPTIONS)))
+	DH_OPTIONS= dh_strip -ppyqt4-dev-tools
+	set -e; \
+	for p in python-qt4 python3-pyqt4 \
+		python-qt4-dbus python3-dbus.mainloop.qt \
+		python-qt4-gl \
+		python-qt4-sql python3-pyqt4.qtsql \
+		python-qt4-phonon python3-pyqt4.phonon \
+		python3-pyqt4.qtopengl \
+		; do \
+		DH_OPTIONS= dh_strip -p$$p --dbg-package=$$p-dbg; \
+		rm -rf debian/$$p-dbg/usr/share/doc/$$p-dbg; \
+		mkdir -p debian/$$p-dbg/usr/share/doc; \
+		ln -s $$p debian/$$p-dbg/usr/share/doc/$$p-dbg; \
+	done
+endif
+	rm -rf $(CURDIR)/debian/python-qt4-dbg/usr/lib/python3*
+	dh_python2 --no-dbg-cleaning
+	dh_python3 --no-dbg-cleaning -N pyqt4-dev-tools
+	rm -rf $(CURDIR)/debian/python-qt4-dbus/usr/share/pyshared
+	rm -rf $(CURDIR)/debian/python-qt4-gl/usr/share/pyshared
+	rm -rf $(CURDIR)/debian/python-qt4-sql/usr/share/pyshared
+	rm -rf $(CURDIR)/debian/python-qt4-phonon/usr/share/pyshared
+	rm -rf $(CURDIR)/debian/python-qt4-doc/usr/share/doc/python-qt4-doc/examples/declarative/modelviews/objectlistmodel/__pycache__
+	rm -rf $(CURDIR)/debian/python-qt4-doc/usr/share/doc/python-qt4-doc/examples/demos/qtdemo/__pycache__
+	rm -rf $(CURDIR)/debian/python3-pyqt4/usr/lib/python3/dist-packages/PyQt4/uic/port_v2
+	rm -rf $(CURDIR)/debian/python3-pyqt4-dbg/usr/bin
+	rm -rf $(CURDIR)/debian/python3-pyqt4-dbg/usr/share/sip
+	rm -rf $(CURDIR)/debian/python3-pyqt4-dbg/usr/lib/python3/dist-packages/PyQt4/uic
+	rm -rf $(CURDIR)/debian/python3-pyqt4-dbg/usr/lib/python3/dist-packages/dbus
+	rm -rf $(CURDIR)/debian/python3-dbus.mainloop.qt/usr/bin
+	rm -rf $(CURDIR)/debian/python3-dbus.mainloop.qt/usr/share/sip
+	rm -rf $(CURDIR)/debian/python3-dbus.mainloop.qt/usr/lib/python3/dist-packages/PyQt4
+	rm -rf $(CURDIR)/debian/python3-dbus.mainloop.qt/usr/lib/python3.*/dist-packages/PyQt4
+	rm -rf $(CURDIR)/debian/python3-dbus.mainloop.qt-dbg/usr/lib/debug/usr/bin
+	rm -rf $(CURDIR)/debian/python3-dbus.mainloop.qt-dbg/usr/lib/debug/usr/lib/python3/dist-packages/PyQt4
+	rm -rf $(CURDIR)/debian/python3-dbus.mainloop.qt-dbg/usr/lib/debug/usr/lib/python3.*/dist-packages/PyQt4
+
+	dh_fixperms
+	dh_compress -X.py -X.bmp -X.ui -X.sql -X.xml -X.qml -X.xpm -X.mng -X.qss -X.xbel -X.txt -Xchilling
+	dh_installdeb
+	dh_shlibdeps
+	dh_gencontrol
+	dh_md5sums
+	dh_builddeb
+
+# Build architecture independant packages using the common target.
+binary-indep: install-indep
+	$(MAKE) -f debian/rules DH_OPTIONS=-i binary-common
+
+# Build architecture dependant packages using the common target.
+binary-arch: install-arch
+	$(MAKE) -f debian/rules DH_OPTIONS=-a binary-common
+
+
+binary: binary-arch binary-indep
+
+get-orig-source:
+	uscan --verbose --download-current-version
+
+.PHONY: build-indep build-arch build clean binary-indep binary-arch binary configure get-orig-source

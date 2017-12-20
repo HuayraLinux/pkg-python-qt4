@@ -1,0 +1,69 @@
+From f8cb5d335df06dd72cf41046da7655dbcf97ea08 Mon Sep 17 00:00:00 2001
+From: SVN-Git Migration <python-modules-team@lists.alioth.debian.org>
+Date: Thu, 8 Oct 2015 12:56:34 -0700
+Subject: disable elementtree and pyuic4 wrapper
+
+Forwarded: not-needed
+Last-Update: 2014-03-18
+
+Patch-Name: debian_configure_changes.diff
+---
+ configure.py | 31 -------------------------------
+ 1 file changed, 31 deletions(-)
+
+diff --git a/configure.py b/configure.py
+index 69c9473..1780f38 100644
+--- a/configure.py
++++ b/configure.py
+@@ -857,35 +857,6 @@ include(%s)
+             makefile.generate()
+             tool.append("dbus")
+ 
+-        # Only include ElementTree for older versions of Python.
+-        if sipcfg.py_version < 0x020500:
+-            sipconfig.inform("Creating elementtree Makefile...")
+-
+-            makefile = sipconfig.PythonModuleMakefile(
+-                configuration=sipcfg,
+-                dstdir=os.path.join(pyqt_modroot, "elementtree"),
+-                dir="elementtree"
+-            )
+-
+-            makefile.generate()
+-            tool.append("elementtree")
+-
+-        # Create the pyuic4 wrapper.  Use the GUI version on MacOS (so that
+-        # previews work properly and normal console use will work anyway), but
+-        # not on Windows (so that normal console use will work).
+-        sipconfig.inform("Creating pyuic4 wrapper...")
+-
+-        if sys.platform == 'darwin':
+-            gui = True
+-
+-            if opts.use_arch is None:
+-                use_arch = ''
+-            else:
+-                use_arch = ' '.join(opts.use_arch)
+-        else:
+-            gui = False
+-            use_arch = ''
+-
+         # The pyuic directory may not exist if we are building away from the
+         # source directory.
+         try:
+@@ -894,7 +865,6 @@ include(%s)
+             pass
+ 
+         uicdir=os.path.join(pyqt_modroot, "uic")
+-        wrapper = sipconfig.create_wrapper(os.path.join(uicdir, "pyuic.py"), os.path.join("pyuic", "pyuic4"), gui, use_arch)
+ 
+         sipconfig.inform("Creating pyuic4 Makefile...")
+ 
+@@ -903,7 +873,6 @@ include(%s)
+             dstdir=uicdir,
+             srcdir=os.path.join(src_dir, "pyuic", "uic"),
+             dir="pyuic",
+-            installs=[[os.path.basename(wrapper), opts.pyqtbindir]]
+         )
+ 
+         makefile.generate()
