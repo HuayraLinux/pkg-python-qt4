@@ -1,3 +1,10 @@
+python-qt4 (4.11.4+dfsg-3~huayra) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * Added support for QtWebKit on python2
+
+ -- Ignacio Losiggio <iglosiggio@gmail.com>  Thu, 21 Dec 2017 18:04:29 -0300
+
 python-qt4 (4.11.4+dfsg-2) unstable; urgency=medium
 
   [ Dmitry Shachnev ]

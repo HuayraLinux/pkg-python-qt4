@@ -258,10 +258,10 @@ ifeq (,$(findstring -i, $(DH_OPTIONS)))
 	set -e; \
 	for p in python-qt4 python3-pyqt4 \
 		python-qt4-dbus python3-dbus.mainloop.qt \
-		python-qt4-gl \
+		python-qt4-gl python3-pyqt4.qtopengl \
 		python-qt4-sql python3-pyqt4.qtsql \
 		python-qt4-phonon python3-pyqt4.phonon \
-		python3-pyqt4.qtopengl \
+		python-qt4-qtwebkit \
 		; do \
 		DH_OPTIONS= dh_strip -p$$p --dbg-package=$$p-dbg; \
 		rm -rf debian/$$p-dbg/usr/share/doc/$$p-dbg; \
